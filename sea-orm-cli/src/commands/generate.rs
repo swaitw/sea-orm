@@ -24,9 +24,16 @@ pub async fn run_generate_command(
             database_schema,
             database_url,
             with_serde,
+            serde_skip_deserializing_primary_key,
+            serde_skip_hidden_column,
             with_copy_enums,
             date_time_crate,
             lib,
+            model_extra_derives,
+            model_extra_attributes,
+            enum_extra_derives,
+            enum_extra_attributes,
+            seaography,
         } => {
             if verbose {
                 let _ = tracing_subscriber::fmt()
@@ -56,19 +63,9 @@ pub async fn run_generate_command(
             // above
             let is_sqlite = url.scheme() == "sqlite";
 
-            let tables = match tables {
-                Some(t) => t,
-                _ => "".to_string(),
-            };
-
             // Closures for filtering tables
-            let filter_tables = |table: &str| -> bool {
-                if !tables.is_empty() {
-                    return tables.contains(&table);
-                }
-
-                true
-            };
+            let filter_tables =
+                |table: &String| -> bool { tables.is_empty() || tables.contains(table) };
 
             let filter_hidden_tables = |table: &str| -> bool {
                 if include_hidden_tables {
@@ -115,9 +112,12 @@ pub async fn run_generate_command(
                     use sea_schema::mysql::discovery::SchemaDiscovery;
                     use sqlx::MySql;
 
-                    let connection = connect::<MySql>(max_connections, url.as_str()).await?;
+                    println!("Connecting to MySQL ...");
+                    let connection =
+                        sqlx_connect::<MySql>(max_connections, url.as_str(), None).await?;
+                    println!("Discovering schema ...");
                     let schema_discovery = SchemaDiscovery::new(connection, database_name);
-                    let schema = schema_discovery.discover().await;
+                    let schema = schema_discovery.discover().await?;
                     let table_stmts = schema
                         .tables
                         .into_iter()
@@ -132,9 +132,15 @@ pub async fn run_generate_command(
                     use sea_schema::sqlite::discovery::SchemaDiscovery;
                     use sqlx::Sqlite;
 
-                    let connection = connect::<Sqlite>(max_connections, url.as_str()).await?;
+                    println!("Connecting to SQLite ...");
+                    let connection =
+                        sqlx_connect::<Sqlite>(max_connections, url.as_str(), None).await?;
+                    println!("Discovering schema ...");
                     let schema_discovery = SchemaDiscovery::new(connection);
-                    let schema = schema_discovery.discover().await?;
+                    let schema = schema_discovery
+                        .discover()
+                        .await?
+                        .merge_indexes_into_table();
                     let table_stmts = schema
                         .tables
                         .into_iter()
@@ -149,10 +155,14 @@ pub async fn run_generate_command(
                     use sea_schema::postgres::discovery::SchemaDiscovery;
                     use sqlx::Postgres;
 
-                    let schema = &database_schema;
-                    let connection = connect::<Postgres>(max_connections, url.as_str()).await?;
+                    println!("Connecting to Postgres ...");
+                    let schema = database_schema.as_deref().unwrap_or("public");
+                    let connection =
+                        sqlx_connect::<Postgres>(max_connections, url.as_str(), Some(schema))
+                            .await?;
+                    println!("Discovering schema ...");
                     let schema_discovery = SchemaDiscovery::new(connection, schema);
-                    let schema = schema_discovery.discover().await;
+                    let schema = schema_discovery.discover().await?;
                     let table_stmts = schema
                         .tables
                         .into_iter()
@@ -161,18 +171,26 @@ pub async fn run_generate_command(
                         .filter(|schema| filter_skip_tables(&schema.info.name))
                         .map(|schema| schema.write())
                         .collect();
-                    (Some(schema.schema), table_stmts)
+                    (database_schema, table_stmts)
                 }
                 _ => unimplemented!("{} is not supported", url.scheme()),
             };
+            println!("... discovered.");
 
             let writer_context = EntityWriterContext::new(
                 expanded_format,
-                WithSerde::from_str(&with_serde).unwrap(),
+                WithSerde::from_str(&with_serde).expect("Invalid serde derive option"),
                 with_copy_enums,
                 date_time_crate.into(),
                 schema_name,
                 lib,
+                serde_skip_deserializing_primary_key,
+                serde_skip_hidden_column,
+                model_extra_derives,
+                model_extra_attributes,
+                enum_extra_derives,
+                enum_extra_attributes,
+                seaography,
             );
             let output = EntityTransformer::transform(table_stmts)?.generate(&writer_context);
 
@@ -181,32 +199,51 @@ pub async fn run_generate_command(
 
             for OutputFile { name, content } in output.files.iter() {
                 let file_path = dir.join(name);
+                println!("Writing {}", file_path.display());
                 let mut file = fs::File::create(file_path)?;
                 file.write_all(content.as_bytes())?;
             }
 
             // Format each of the files
             for OutputFile { name, .. } in output.files.iter() {
-                Command::new("rustfmt")
-                    .arg(dir.join(name))
-                    .spawn()?
-                    .wait()?;
+                let exit_status = Command::new("rustfmt").arg(dir.join(name)).status()?; // Get the status code
+                if !exit_status.success() {
+                    // Propagate the error if any
+                    return Err(format!("Fail to format file `{name}`").into());
+                }
             }
+
+            println!("... Done.");
         }
     }
 
     Ok(())
 }
 
-async fn connect<DB>(max_connections: u32, url: &str) -> Result<sqlx::Pool<DB>, Box<dyn Error>>
+async fn sqlx_connect<DB>(
+    max_connections: u32,
+    url: &str,
+    schema: Option<&str>,
+) -> Result<sqlx::Pool<DB>, Box<dyn Error>>
 where
     DB: sqlx::Database,
+    for<'a> &'a mut <DB as sqlx::Database>::Connection: sqlx::Executor<'a>,
 {
-    sqlx::pool::PoolOptions::<DB>::new()
-        .max_connections(max_connections)
-        .connect(url)
-        .await
-        .map_err(Into::into)
+    let mut pool_options = sqlx::pool::PoolOptions::<DB>::new().max_connections(max_connections);
+    // Set search_path for Postgres, E.g. Some("public") by default
+    // MySQL & SQLite connection initialize with schema `None`
+    if let Some(schema) = schema {
+        let sql = format!("SET search_path = '{schema}'");
+        pool_options = pool_options.after_connect(move |conn, _| {
+            let sql = sql.clone();
+            Box::pin(async move {
+                sqlx::Executor::execute(conn, sql.as_str())
+                    .await
+                    .map(|_| ())
+            })
+        });
+    }
+    pool_options.connect(url).await.map_err(Into::into)
 }
 
 impl From<DateTimeCrate> for CodegenDateTimeCrate {
@@ -220,7 +257,7 @@ impl From<DateTimeCrate> for CodegenDateTimeCrate {
 
 #[cfg(test)]
 mod tests {
-    use clap::StructOpt;
+    use clap::Parser;
 
     use super::*;
     use crate::{Cli, Commands};
@@ -230,7 +267,7 @@ mod tests {
         expected = "called `Result::unwrap()` on an `Err` value: RelativeUrlWithoutBase"
     )]
     fn test_generate_entity_no_protocol() {
-        let cli = Cli::parse_from(vec![
+        let cli = Cli::parse_from([
             "sea-orm-cli",
             "generate",
             "entity",
@@ -251,7 +288,7 @@ mod tests {
         expected = "There is no database name as part of the url path: postgresql://root:root@localhost:3306"
     )]
     fn test_generate_entity_no_database_section() {
-        let cli = Cli::parse_from(vec![
+        let cli = Cli::parse_from([
             "sea-orm-cli",
             "generate",
             "entity",
@@ -272,7 +309,7 @@ mod tests {
         expected = "There is no database name as part of the url path: mysql://root:root@localhost:3306/"
     )]
     fn test_generate_entity_no_database_path() {
-        let cli = Cli::parse_from(vec![
+        let cli = Cli::parse_from([
             "sea-orm-cli",
             "generate",
             "entity",
@@ -291,7 +328,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "called `Result::unwrap()` on an `Err` value: PoolTimedOut")]
     fn test_generate_entity_no_password() {
-        let cli = Cli::parse_from(vec![
+        let cli = Cli::parse_from([
             "sea-orm-cli",
             "generate",
             "entity",
@@ -310,7 +347,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "called `Result::unwrap()` on an `Err` value: EmptyHost")]
     fn test_generate_entity_no_host() {
-        let cli = Cli::parse_from(vec![
+        let cli = Cli::parse_from([
             "sea-orm-cli",
             "generate",
             "entity",

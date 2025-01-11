@@ -1,3 +1,5 @@
+#![allow(unused_imports, dead_code)]
+
 pub mod common;
 
 pub use common::{features::*, setup::*, TestContext};
@@ -5,11 +7,6 @@ use pretty_assertions::assert_eq;
 use sea_orm::{entity::prelude::*, entity::*, DatabaseConnection};
 
 #[sea_orm_macros::test]
-#[cfg(any(
-    feature = "sqlx-mysql",
-    feature = "sqlx-sqlite",
-    feature = "sqlx-postgres"
-))]
 async fn main() -> Result<(), DbErr> {
     let ctx = TestContext::new("byte_primary_key_tests").await;
     create_tables(&ctx.db).await?;
@@ -45,12 +42,7 @@ pub async fn create_and_update(db: &DatabaseConnection) -> Result<(), DbErr> {
         .exec(db)
         .await;
 
-    assert_eq!(
-        update_res,
-        Err(DbErr::RecordNotFound(
-            "None of the database rows are affected".to_owned()
-        ))
-    );
+    assert_eq!(update_res, Err(DbErr::RecordNotUpdated));
 
     let update_res = Entity::update(updated_active_model)
         .filter(Column::Id.eq(vec![1_u8, 2_u8, 3_u8])) // annotate it as Vec<u8> explicitly
@@ -74,6 +66,24 @@ pub async fn create_and_update(db: &DatabaseConnection) -> Result<(), DbErr> {
             id: vec![1, 2, 3],
             value: "First Row (Updated)".to_owned(),
         })
+    );
+
+    assert_eq!(
+        Entity::find()
+            .filter(Column::Id.eq(vec![1_u8, 2_u8, 3_u8])) // annotate it as Vec<u8> explicitly
+            .into_values::<_, Column>()
+            .one(db)
+            .await?,
+        Some((vec![1_u8, 2_u8, 3_u8], "First Row (Updated)".to_owned(),))
+    );
+
+    assert_eq!(
+        Entity::find()
+            .filter(Column::Id.eq(vec![1_u8, 2_u8, 3_u8])) // annotate it as Vec<u8> explicitly
+            .into_tuple()
+            .one(db)
+            .await?,
+        Some((vec![1_u8, 2_u8, 3_u8], "First Row (Updated)".to_owned(),))
     );
 
     Ok(())

@@ -1,3 +1,5 @@
+#![allow(unused_imports, dead_code)]
+
 pub mod common;
 
 pub use common::{features::*, setup::*, TestContext};
@@ -6,11 +8,6 @@ use sea_orm::{entity::prelude::*, entity::*, DatabaseConnection};
 use serde_json::json;
 
 #[sea_orm_macros::test]
-#[cfg(any(
-    feature = "sqlx-mysql",
-    feature = "sqlx-sqlite",
-    feature = "sqlx-postgres"
-))]
 async fn main() -> Result<(), DbErr> {
     let ctx = TestContext::new("bakery_chain_schema_uuid_tests").await;
     create_tables(&ctx.db).await?;
@@ -28,8 +25,8 @@ pub async fn insert_metadata(db: &DatabaseConnection) -> Result<(), DbErr> {
         key: "markup".to_owned(),
         value: "1.18".to_owned(),
         bytes: vec![1, 2, 3],
-        date: Some(Date::from_ymd(2021, 9, 27)),
-        time: Some(Time::from_hms(11, 32, 55)),
+        date: Some(Date::from_ymd_opt(2021, 9, 27).unwrap()),
+        time: Some(Time::from_hms_opt(11, 32, 55).unwrap()),
     };
 
     let result = metadata.clone().into_active_model().insert(db).await?;
@@ -65,8 +62,8 @@ pub async fn create_and_update_metadata(db: &DatabaseConnection) -> Result<(), D
         key: "markup".to_owned(),
         value: "1.18".to_owned(),
         bytes: vec![1, 2, 3],
-        date: Some(Date::from_ymd(2021, 9, 27)),
-        time: Some(Time::from_hms(11, 32, 55)),
+        date: Some(Date::from_ymd_opt(2021, 9, 27).unwrap()),
+        time: Some(Time::from_hms_opt(11, 32, 55).unwrap()),
     };
 
     let res = Metadata::insert(metadata.clone().into_active_model())
@@ -85,12 +82,7 @@ pub async fn create_and_update_metadata(db: &DatabaseConnection) -> Result<(), D
     .exec(db)
     .await;
 
-    assert_eq!(
-        update_res,
-        Err(DbErr::RecordNotFound(
-            "None of the database rows are affected".to_owned()
-        ))
-    );
+    assert_eq!(update_res, Err(DbErr::RecordNotUpdated));
 
     Ok(())
 }

@@ -1,21 +1,19 @@
 #![allow(missing_docs)]
 
 use std::{ops::DerefMut, pin::Pin, task::Poll};
+use tracing::instrument;
 
-use futures::Stream;
 #[cfg(feature = "sqlx-dep")]
 use futures::TryStreamExt;
+use futures::{lock::MutexGuard, Stream};
 
 #[cfg(feature = "sqlx-dep")]
 use sqlx::Executor;
 
-use futures::lock::MutexGuard;
-
-use tracing::instrument;
-
-use crate::{DbErr, InnerConnection, QueryResult, Statement};
-
 use super::metric::MetricStream;
+#[cfg(feature = "sqlx-dep")]
+use crate::driver::*;
+use crate::{DbErr, InnerConnection, QueryResult, Statement};
 
 /// `TransactionStream` cannot be used in a `transaction` closure as it does not impl `Send`.
 /// It seems to be a Rust limitation right now, and solution to work around this deemed to be extremely hard.
@@ -29,20 +27,20 @@ pub struct TransactionStream<'a> {
     stream: MetricStream<'this>,
 }
 
-impl<'a> std::fmt::Debug for TransactionStream<'a> {
+impl std::fmt::Debug for TransactionStream<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "TransactionStream")
     }
 }
 
-impl<'a> TransactionStream<'a> {
+impl TransactionStream<'_> {
     #[instrument(level = "trace", skip(metric_callback))]
     #[allow(unused_variables)]
     pub(crate) fn build(
-        conn: MutexGuard<'a, InnerConnection>,
+        conn: MutexGuard<'_, InnerConnection>,
         stmt: Statement,
         metric_callback: Option<crate::metric::Callback>,
-    ) -> TransactionStream<'a> {
+    ) -> TransactionStream<'_> {
         TransactionStreamBuilder {
             stmt,
             conn,
@@ -55,7 +53,7 @@ impl<'a> TransactionStream<'a> {
                     let stream = c
                         .fetch(query)
                         .map_ok(Into::into)
-                        .map_err(crate::sqlx_error_to_query_err);
+                        .map_err(sqlx_error_to_query_err);
                     let elapsed = _start.map(|s| s.elapsed().unwrap_or_default());
                     MetricStream::new(_metric_callback, stmt, elapsed, stream)
                 }
@@ -66,7 +64,7 @@ impl<'a> TransactionStream<'a> {
                     let stream = c
                         .fetch(query)
                         .map_ok(Into::into)
-                        .map_err(crate::sqlx_error_to_query_err);
+                        .map_err(sqlx_error_to_query_err);
                     let elapsed = _start.map(|s| s.elapsed().unwrap_or_default());
                     MetricStream::new(_metric_callback, stmt, elapsed, stream)
                 }
@@ -77,7 +75,7 @@ impl<'a> TransactionStream<'a> {
                     let stream = c
                         .fetch(query)
                         .map_ok(Into::into)
-                        .map_err(crate::sqlx_error_to_query_err);
+                        .map_err(sqlx_error_to_query_err);
                     let elapsed = _start.map(|s| s.elapsed().unwrap_or_default());
                     MetricStream::new(_metric_callback, stmt, elapsed, stream)
                 }
@@ -88,6 +86,10 @@ impl<'a> TransactionStream<'a> {
                     let elapsed = _start.map(|s| s.elapsed().unwrap_or_default());
                     MetricStream::new(_metric_callback, stmt, elapsed, stream)
                 }
+                #[cfg(feature = "proxy")]
+                InnerConnection::Proxy(c) => {
+                    todo!("Proxy connection is not supported")
+                }
                 #[allow(unreachable_patterns)]
                 _ => unreachable!(),
             },
@@ -96,7 +98,7 @@ impl<'a> TransactionStream<'a> {
     }
 }
 
-impl<'a> Stream for TransactionStream<'a> {
+impl Stream for TransactionStream<'_> {
     type Item = Result<QueryResult, DbErr>;
 
     fn poll_next(
