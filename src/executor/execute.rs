@@ -22,12 +22,19 @@ pub(crate) enum ExecResultHolder {
     /// Holds the result of executing an operation on the Mock database
     #[cfg(feature = "mock")]
     Mock(crate::MockExecResult),
+    /// Holds the result of executing an operation on the Proxy database
+    #[cfg(feature = "proxy")]
+    Proxy(crate::ProxyExecResult),
 }
 
 // ExecResult //
 
 impl ExecResult {
     /// Get the last id after `AUTOINCREMENT` is done on the primary key
+    ///
+    /// # Panics
+    ///
+    /// Postgres does not support retrieving last insert id this way except through `RETURNING` clause
     pub fn last_insert_id(&self) -> u64 {
         match &self.result {
             #[cfg(feature = "sqlx-mysql")]
@@ -40,19 +47,21 @@ impl ExecResult {
             ExecResultHolder::SqlxSqlite(result) => {
                 let last_insert_rowid = result.last_insert_rowid();
                 if last_insert_rowid < 0 {
-                    panic!("negative last_insert_rowid")
+                    unreachable!("negative last_insert_rowid")
                 } else {
                     last_insert_rowid as u64
                 }
             }
             #[cfg(feature = "mock")]
             ExecResultHolder::Mock(result) => result.last_insert_id,
+            #[cfg(feature = "proxy")]
+            ExecResultHolder::Proxy(result) => result.last_insert_id,
             #[allow(unreachable_patterns)]
             _ => unreachable!(),
         }
     }
 
-    /// Get the number of rows affedted by the operation
+    /// Get the number of rows affected by the operation
     pub fn rows_affected(&self) -> u64 {
         match &self.result {
             #[cfg(feature = "sqlx-mysql")]
@@ -63,6 +72,8 @@ impl ExecResult {
             ExecResultHolder::SqlxSqlite(result) => result.rows_affected(),
             #[cfg(feature = "mock")]
             ExecResultHolder::Mock(result) => result.rows_affected,
+            #[cfg(feature = "proxy")]
+            ExecResultHolder::Proxy(result) => result.rows_affected,
             #[allow(unreachable_patterns)]
             _ => unreachable!(),
         }

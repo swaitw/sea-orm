@@ -1,4 +1,4 @@
-use actix_example_core::{
+use actix_example_service::{
     sea_orm::{Database, DatabaseConnection},
     Mutation, Query,
 };
@@ -89,24 +89,34 @@ async fn create(
         .finish())
 }
 
-#[get("/{id}")]
+#[get(r#"/{id:\d+}"#)]
 async fn edit(data: web::Data<AppState>, id: web::Path<i32>) -> Result<HttpResponse, Error> {
     let conn = &data.conn;
     let template = &data.templates;
     let id = id.into_inner();
 
-    let post: post::Model = Query::find_post_by_id(conn, id)
+    let post: Option<post::Model> = Query::find_post_by_id(conn, id)
         .await
-        .expect("could not find post")
-        .unwrap_or_else(|| panic!("could not find post with id {}", id));
+        .expect("could not find post");
 
     let mut ctx = tera::Context::new();
-    ctx.insert("post", &post);
+    let body = match post {
+        Some(post) => {
+            ctx.insert("post", &post);
 
-    let body = template
-        .render("edit.html.tera", &ctx)
-        .map_err(|_| error::ErrorInternalServerError("Template error"))?;
-    Ok(HttpResponse::Ok().content_type("text/html").body(body))
+            template
+                .render("edit.html.tera", &ctx)
+                .map_err(|_| error::ErrorInternalServerError("Template error"))
+        }
+        None => {
+            ctx.insert("uri", &format!("/{}", id));
+
+            template
+                .render("error/404.html.tera", &ctx)
+                .map_err(|_| error::ErrorInternalServerError("Template error"))
+        }
+    };
+    Ok(HttpResponse::Ok().content_type("text/html").body(body?))
 }
 
 #[post("/{id}")]
@@ -164,7 +174,7 @@ async fn start() -> std::io::Result<()> {
     let db_url = env::var("DATABASE_URL").expect("DATABASE_URL is not set in .env file");
     let host = env::var("HOST").expect("HOST is not set in .env file");
     let port = env::var("PORT").expect("PORT is not set in .env file");
-    let server_url = format!("{}:{}", host, port);
+    let server_url = format!("{host}:{port}");
 
     // establish connection to database and apply migrations
     // -> create post table if not exists
@@ -191,7 +201,7 @@ async fn start() -> std::io::Result<()> {
         None => server.bind(&server_url)?,
     };
 
-    println!("Starting server at {}", server_url);
+    println!("Starting server at {server_url}");
     server.run().await?;
 
     Ok(())
@@ -210,6 +220,6 @@ pub fn main() {
     let result = start();
 
     if let Some(err) = result.err() {
-        println!("Error: {}", err);
+        println!("Error: {err}");
     }
 }

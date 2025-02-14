@@ -1,22 +1,19 @@
 #![allow(missing_docs, unreachable_code, unused_variables)]
 
-use std::{pin::Pin, task::Poll};
-
-#[cfg(feature = "mock")]
-use std::sync::Arc;
-
 use futures::Stream;
+use std::{pin::Pin, task::Poll};
+use tracing::instrument;
+
 #[cfg(feature = "sqlx-dep")]
 use futures::TryStreamExt;
 
 #[cfg(feature = "sqlx-dep")]
-use sqlx::{pool::PoolConnection, Executor};
-
-use tracing::instrument;
-
-use crate::{DbErr, InnerConnection, QueryResult, Statement};
+use sqlx::Executor;
 
 use super::metric::MetricStream;
+#[cfg(feature = "sqlx-dep")]
+use crate::driver::*;
+use crate::{DbErr, InnerConnection, QueryResult, Statement};
 
 /// Creates a stream from a [QueryResult]
 #[ouroboros::self_referencing]
@@ -29,82 +26,6 @@ pub struct QueryStream {
     stream: MetricStream<'this>,
 }
 
-#[cfg(feature = "sqlx-mysql")]
-impl
-    From<(
-        PoolConnection<sqlx::MySql>,
-        Statement,
-        Option<crate::metric::Callback>,
-    )> for QueryStream
-{
-    fn from(
-        (conn, stmt, metric_callback): (
-            PoolConnection<sqlx::MySql>,
-            Statement,
-            Option<crate::metric::Callback>,
-        ),
-    ) -> Self {
-        QueryStream::build(stmt, InnerConnection::MySql(conn), metric_callback)
-    }
-}
-
-#[cfg(feature = "sqlx-postgres")]
-impl
-    From<(
-        PoolConnection<sqlx::Postgres>,
-        Statement,
-        Option<crate::metric::Callback>,
-    )> for QueryStream
-{
-    fn from(
-        (conn, stmt, metric_callback): (
-            PoolConnection<sqlx::Postgres>,
-            Statement,
-            Option<crate::metric::Callback>,
-        ),
-    ) -> Self {
-        QueryStream::build(stmt, InnerConnection::Postgres(conn), metric_callback)
-    }
-}
-
-#[cfg(feature = "sqlx-sqlite")]
-impl
-    From<(
-        PoolConnection<sqlx::Sqlite>,
-        Statement,
-        Option<crate::metric::Callback>,
-    )> for QueryStream
-{
-    fn from(
-        (conn, stmt, metric_callback): (
-            PoolConnection<sqlx::Sqlite>,
-            Statement,
-            Option<crate::metric::Callback>,
-        ),
-    ) -> Self {
-        QueryStream::build(stmt, InnerConnection::Sqlite(conn), metric_callback)
-    }
-}
-
-#[cfg(feature = "mock")]
-impl
-    From<(
-        Arc<crate::MockDatabaseConnection>,
-        Statement,
-        Option<crate::metric::Callback>,
-    )> for QueryStream
-{
-    fn from(
-        (conn, stmt, metric_callback): (
-            Arc<crate::MockDatabaseConnection>,
-            Statement,
-            Option<crate::metric::Callback>,
-        ),
-    ) -> Self {
-        QueryStream::build(stmt, InnerConnection::Mock(conn), metric_callback)
-    }
-}
-
 impl std::fmt::Debug for QueryStream {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "QueryStream")
@@ -113,7 +34,7 @@ impl std::fmt::Debug for QueryStream {
 
 impl QueryStream {
     #[instrument(level = "trace", skip(metric_callback))]
-    fn build(
+    pub(crate) fn build(
         stmt: Statement,
         conn: InnerConnection,
         metric_callback: Option<crate::metric::Callback>,
@@ -130,7 +51,7 @@ impl QueryStream {
                     let stream = c
                         .fetch(query)
                         .map_ok(Into::into)
-                        .map_err(crate::sqlx_error_to_query_err);
+                        .map_err(sqlx_error_to_query_err);
                     let elapsed = _start.map(|s| s.elapsed().unwrap_or_default());
                     MetricStream::new(_metric_callback, stmt, elapsed, stream)
                 }
@@ -141,7 +62,7 @@ impl QueryStream {
                     let stream = c
                         .fetch(query)
                         .map_ok(Into::into)
-                        .map_err(crate::sqlx_error_to_query_err);
+                        .map_err(sqlx_error_to_query_err);
                     let elapsed = _start.map(|s| s.elapsed().unwrap_or_default());
                     MetricStream::new(_metric_callback, stmt, elapsed, stream)
                 }
@@ -152,7 +73,7 @@ impl QueryStream {
                     let stream = c
                         .fetch(query)
                         .map_ok(Into::into)
-                        .map_err(crate::sqlx_error_to_query_err);
+                        .map_err(sqlx_error_to_query_err);
                     let elapsed = _start.map(|s| s.elapsed().unwrap_or_default());
                     MetricStream::new(_metric_callback, stmt, elapsed, stream)
                 }
@@ -162,6 +83,10 @@ impl QueryStream {
                     let stream = c.fetch(stmt);
                     let elapsed = _start.map(|s| s.elapsed().unwrap_or_default());
                     MetricStream::new(_metric_callback, stmt, elapsed, stream)
+                }
+                #[cfg(feature = "proxy")]
+                InnerConnection::Proxy(c) => {
+                    todo!("Proxy connection is not supported")
                 }
                 #[allow(unreachable_patterns)]
                 _ => unreachable!(),
