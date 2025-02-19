@@ -1,6 +1,5 @@
 pub use super::*;
 use chrono::offset::Utc;
-use rust_decimal_macros::dec;
 use uuid::Uuid;
 
 pub async fn test_create_order(db: &DbConn) {
@@ -23,7 +22,7 @@ pub async fn test_create_order(db: &DbConn) {
             "home": "0395555555",
             "address": "12 Test St, Testville, Vic, Australia"
         })),
-        bakery_id: Set(Some(bakery_insert_res.last_insert_id as i32)),
+        bakery_id: Set(Some(bakery_insert_res.last_insert_id)),
         ..Default::default()
     };
     let baker_insert_res = Baker::insert(baker_bob)
@@ -34,10 +33,10 @@ pub async fn test_create_order(db: &DbConn) {
     // Cake
     let mud_cake = cake::ActiveModel {
         name: Set("Mud Cake".to_owned()),
-        price: Set(dec!(10.25)),
+        price: Set(rust_dec(10.25)),
         gluten_free: Set(false),
         serial: Set(Uuid::new_v4()),
-        bakery_id: Set(Some(bakery_insert_res.last_insert_id as i32)),
+        bakery_id: Set(Some(bakery_insert_res.last_insert_id)),
         ..Default::default()
     };
 
@@ -48,8 +47,8 @@ pub async fn test_create_order(db: &DbConn) {
 
     // Cake_Baker
     let cake_baker = cakes_bakers::ActiveModel {
-        cake_id: Set(cake_insert_res.last_insert_id as i32),
-        baker_id: Set(baker_insert_res.last_insert_id as i32),
+        cake_id: Set(cake_insert_res.last_insert_id),
+        baker_id: Set(baker_insert_res.last_insert_id),
     };
     let cake_baker_res = CakesBakers::insert(cake_baker.clone())
         .exec(db)
@@ -73,9 +72,9 @@ pub async fn test_create_order(db: &DbConn) {
 
     // Order
     let order_1 = order::ActiveModel {
-        bakery_id: Set(bakery_insert_res.last_insert_id as i32),
-        customer_id: Set(customer_insert_res.last_insert_id as i32),
-        total: Set(dec!(15.10)),
+        bakery_id: Set(bakery_insert_res.last_insert_id),
+        customer_id: Set(customer_insert_res.last_insert_id),
+        total: Set(rust_dec(15.10)),
         placed_at: Set(Utc::now().naive_utc()),
         ..Default::default()
     };
@@ -86,9 +85,9 @@ pub async fn test_create_order(db: &DbConn) {
 
     // Lineitem
     let lineitem_1 = lineitem::ActiveModel {
-        cake_id: Set(cake_insert_res.last_insert_id as i32),
-        order_id: Set(order_insert_res.last_insert_id as i32),
-        price: Set(dec!(7.55)),
+        cake_id: Set(cake_insert_res.last_insert_id),
+        order_id: Set(order_insert_res.last_insert_id),
+        price: Set(rust_dec(7.55)),
         quantity: Set(2),
         ..Default::default()
     };
@@ -97,14 +96,14 @@ pub async fn test_create_order(db: &DbConn) {
         .await
         .expect("could not insert lineitem");
 
-    let order: Option<order::Model> = Order::find_by_id(order_insert_res.last_insert_id as i32)
+    let order: Option<order::Model> = Order::find_by_id(order_insert_res.last_insert_id)
         .one(db)
         .await
         .expect("could not find order");
 
     assert!(order.is_some());
     let order_model = order.unwrap();
-    assert_eq!(order_model.total, dec!(15.10));
+    assert_eq!(order_model.total, rust_dec(15.10));
 
     let customer: Option<customer::Model> = Customer::find_by_id(order_model.customer_id)
         .one(db)
@@ -128,6 +127,6 @@ pub async fn test_create_order(db: &DbConn) {
         .await
         .expect("could not find related lineitems");
     assert_eq!(related_lineitems.len(), 1);
-    assert_eq!(related_lineitems[0].price, dec!(7.55));
+    assert_eq!(related_lineitems[0].price, rust_dec(7.55));
     assert_eq!(related_lineitems[0].quantity, 2);
 }

@@ -1,4 +1,4 @@
-use rocket_example_core::sea_orm;
+use rocket_example_service::sea_orm;
 
 use async_trait::async_trait;
 use sea_orm::ConnectOptions;
@@ -26,7 +26,8 @@ impl sea_orm_rocket::Pool for SeaOrmPool {
         options
             .max_connections(config.max_connections as u32)
             .min_connections(config.min_connections.unwrap_or_default())
-            .connect_timeout(Duration::from_secs(config.connect_timeout));
+            .connect_timeout(Duration::from_secs(config.connect_timeout))
+            .sqlx_logging(config.sqlx_logging);
         if let Some(idle_timeout) = config.idle_timeout {
             options.idle_timeout(Duration::from_secs(idle_timeout));
         }

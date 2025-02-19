@@ -1,4 +1,5 @@
-use sea_orm::entity::prelude::*;
+use crate::common::setup::rust_dec;
+use sea_orm::{entity::prelude::*, ConnectionTrait};
 
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
 #[sea_orm(table_name = "cake")]
@@ -6,7 +7,7 @@ pub struct Model {
     #[sea_orm(primary_key)]
     pub id: i32,
     pub name: String,
-    #[sea_orm(column_type = "Decimal(Some((19, 4)))")]
+    #[sea_orm(column_type = "Decimal(Some((16, 4)))")]
     pub price: Decimal,
     pub bakery_id: Option<i32>,
     pub gluten_free: bool,
@@ -20,7 +21,7 @@ pub enum Relation {
         from = "Column::BakeryId",
         to = "super::bakery::Column::Id",
         on_update = "Cascade",
-        on_delete = "Cascade"
+        on_delete = "SetNull"
     )]
     Bakery,
     #[sea_orm(has_many = "super::lineitem::Entity")]
@@ -49,6 +50,7 @@ impl Related<super::lineitem::Entity> for Entity {
     }
 }
 
+#[async_trait::async_trait]
 impl ActiveModelBehavior for ActiveModel {
     fn new() -> Self {
         use sea_orm::Set;
@@ -58,31 +60,36 @@ impl ActiveModelBehavior for ActiveModel {
         }
     }
 
-    fn before_save(self, insert: bool) -> Result<Self, DbErr> {
-        use rust_decimal_macros::dec;
-        if self.price.as_ref() == &dec!(0) {
+    async fn before_save<C>(self, _db: &C, insert: bool) -> Result<Self, DbErr>
+    where
+        C: ConnectionTrait,
+    {
+        if self.price.as_ref() == &rust_dec(0) {
             Err(DbErr::Custom(format!(
-                "[before_save] Invalid Price, insert: {}",
-                insert
+                "[before_save] Invalid Price, insert: {insert}"
             )))
         } else {
             Ok(self)
         }
     }
 
-    fn after_save(model: Model, insert: bool) -> Result<Model, DbErr> {
-        use rust_decimal_macros::dec;
-        if model.price < dec!(0) {
+    async fn after_save<C>(model: Model, _db: &C, insert: bool) -> Result<Model, DbErr>
+    where
+        C: ConnectionTrait,
+    {
+        if model.price < rust_dec(0) {
             Err(DbErr::Custom(format!(
-                "[after_save] Invalid Price, insert: {}",
-                insert
+                "[after_save] Invalid Price, insert: {insert}"
             )))
         } else {
             Ok(model)
         }
     }
 
-    fn before_delete(self) -> Result<Self, DbErr> {
+    async fn before_delete<C>(self, _db: &C) -> Result<Self, DbErr>
+    where
+        C: ConnectionTrait,
+    {
         if self.name.as_ref().contains("(err_on_before_delete)") {
             Err(DbErr::Custom(
                 "[before_delete] Cannot be deleted".to_owned(),
@@ -92,7 +99,10 @@ impl ActiveModelBehavior for ActiveModel {
         }
     }
 
-    fn after_delete(self) -> Result<Self, DbErr> {
+    async fn after_delete<C>(self, _db: &C) -> Result<Self, DbErr>
+    where
+        C: ConnectionTrait,
+    {
         if self.name.as_ref().contains("(err_on_after_delete)") {
             Err(DbErr::Custom("[after_delete] Cannot be deleted".to_owned()))
         } else {
